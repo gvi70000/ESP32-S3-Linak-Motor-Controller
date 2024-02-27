@@ -25,19 +25,28 @@ const char* TOPIC_HUMIDITY    = "Linak1/Humidity";
 const char* TOPIC_POSITION    = "Linak1/Position";
 const char* TOPIC_BTN_UP      = "Linak1/Up";
 const char* TOPIC_BTN_DOWN    = "Linak1/Down";
-const float  POSITION_COEFF   = 7.976;
+// Distance 0 to 500mm
+// Board 1
+// R2 = 0.996k, R1 = 9.99k, @10V the output is 898mV or 3378 ADC
+// @ 500mm we have 2880ADC, so the distance d = 0.1736*ADC units
+const float  POSITION_COEFF   = 0.1736;
+const float  POSITION_TOLERANCE = 0.5; // in mm
 const uint16_t UART_SPEED     = 9600;
 const uint16_t WIFI_PERIOD    = 1000;
-const uint16_t MQTT_PERIOD    = 30000;
+const uint16_t WIFI_BREAK     = 2000;
+const uint16_t MQTT_PERIOD    = 30; // Seconds
 const uint8_t  DEBOUNCE_DELAY = 50;
 const uint8_t  DELAY_MQTT     = 50;
-
+const uint8_t NO_OF_READINGS  = 10;
 // Global variables
 AM2302::AM2302_Sensor am2302(DHT22_PIN);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 volatile uint16_t mqttTime = 0;
-uint16_t crtPosition = 0, prevPosition = 0;
+float crtPosition = 0.0, prevPosition = 0.0;
+
+// Timer
+hw_timer_t * timer = NULL;
 
 // Function prototypes
 void onTimer();
@@ -48,9 +57,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length);
 float getPosition();
 void getButtons();
 void getSensors();
+void wifiErrorHandler();
+void mqttErrorHandler();
 
 void setup() {
   Serial.begin(UART_SPEED);
+  analogSetAttenuation(ADC_2_5db);
   analogReadResolution(12);
   pinMode(LED_PIN, OUTPUT);
   pinMode(BTN_UP_PIN, INPUT);
@@ -60,29 +72,47 @@ void setup() {
   digitalWrite(CTRL_UP_PIN, HIGH);
   digitalWrite(CTRL_DOWN_PIN, HIGH);
   am2302.begin();
+  
   setupWiFi();
   mqttClient.setServer(MQTT_SERVER, 1883);
   mqttClient.setCallback(mqttCallback);
   mqttClient.subscribe(TOPIC_POSITION); // Subscribe to position topic
+  // Timer initialization
+  // Set timer frequency to 1Mhz (default timer frequency is 80MHz)
+  timer = timerBegin(0, 80, true);
+  // Attach onTimer function to our timer.
+  timerAttachInterrupt(timer, &onTimer, true);
+  // Set alarm to call onTimer function every second (value in microseconds).
+  // Repeat the alarm (third parameter) with unlimited count = 0 (fourth parameter).
+  timerAlarmWrite(timer, 1000000, true);
+  timerAlarmEnable(timer);
+  Serial.println("Done.");
 }
 
 void loop() {
   mqttClient.loop();
   getButtons();
-  
-  // Check if position changed
+  // Check if position changed, new value form MQTT
   if (crtPosition != prevPosition) {
     prevPosition = crtPosition;
     crtPosition = getPosition();
+    float minPosition = prevPosition - POSITION_TOLERANCE;
+    float maxPosition = prevPosition + POSITION_TOLERANCE;
     // Move motor based on position change
     if (crtPosition < prevPosition) {
-      digitalWrite(CTRL_UP_PIN, LOW);
-    } else if (crtPosition > prevPosition) {
+      // Pull motor rod
       digitalWrite(CTRL_DOWN_PIN, LOW);
+    } else if (crtPosition > prevPosition) {
+      // Push motor rod
+      digitalWrite(CTRL_UP_PIN, LOW);
     }
-    // Wait until position stabilizes
-    while (crtPosition != prevPosition) {
+    // Wait until position gets in tolerance, target +/- 0.5mm
+    while (1) {
       crtPosition = getPosition();
+      if(minPosition < crtPosition) && (crtPosition < maxPosition)) {
+        prevPosition = crtPosition;
+        break; // Exit loop
+      }
     }
     // Stop motor movement
     digitalWrite(CTRL_UP_PIN, HIGH);
@@ -94,10 +124,18 @@ void loop() {
     getSensors();
     mqttTime = 0;
   }
+
+  // Flash LED for WiFi or MQTT errors
+  if (!WiFi.isConnected()) {
+    wifiErrorHandler();
+  }
+  if (!mqttClient.connected()) {
+    mqttErrorHandler();
+  }
 }
 
 // Timer interrupt function
-void onTimer() {
+void IRAM_ATTR onTimer() {
   mqttTime++;
 }
 
@@ -143,13 +181,19 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     messageTemp += (char)payload[i];
   }
   if (strcmp(topic, TOPIC_POSITION) == 0) {
-    crtPosition = messageTemp.toInt();
+    crtPosition = messageTemp.toFloat();
   }
 }
 
 // Read current position from analog pin
 float getPosition() {
-  return analogRead(POSITION_PIN) / POSITION_COEFF;
+  uint16_t sum = 0;
+  for(uint8_t i = 0; i < NO_OF_READINGS; i++){
+    sum += analogRead(POSITION_PIN);
+    delay(1);
+  }
+  sum /= NO_OF_READINGS;
+  return (float)sum * POSITION_COEFF;
 }
 
 // Read button states
@@ -167,4 +211,28 @@ void getSensors() {
   publishToMQTT(TOPIC_TEMPERATURE, String(am2302.get_Temperature()));
   publishToMQTT(TOPIC_HUMIDITY, String(am2302.get_Humidity()));
   publishToMQTT(TOPIC_POSITION, String(crtPosition));
+}
+
+// Handle WiFi error
+void wifiErrorHandler() {
+  constexpr uint16_t wifi_delay = 500;
+  for (int i = 0; i < 2; i++) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(wifi_delay);
+    digitalWrite(LED_PIN, LOW);
+    delay(wifi_delay);
+  }
+  delay(WIFI_BREAK); // 2 seconds break
+}
+
+// Handle MQTT error
+void mqttErrorHandler() {
+  constexpr uint16_t mqtt_delay = 500;
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(mqtt_delay);
+    digitalWrite(LED_PIN, LOW);
+    delay(mqtt_delay);
+  }
+  delay(WIFI_BREAK); // 2 seconds break
 }
