@@ -4,14 +4,15 @@
 #include <PubSubClient.h>
 #include <AM2302-Sensor.h>
 
+const uint16_t UART_SPEED       = 9600;
 // Pins used
-const uint8_t POSITION_PIN    = 1;
-const uint8_t LED_PIN         = 4;
-const uint8_t BTN_UP_PIN      = 10;
-const uint8_t BTN_DOWN_PIN    = 11;
-const uint8_t CTRL_UP_PIN     = 12;
-const uint8_t CTRL_DOWN_PIN   = 13;
-const uint8_t DHT22_PIN       = 14;
+const uint8_t POSITION_PIN    = 1; // ADC value from violer wire
+const uint8_t LED_PIN         = 4; // Used for errors
+const uint8_t BTN_UP_PIN      = 10; // 1 on PCB
+const uint8_t BTN_DOWN_PIN    = 11; // 2 on PCB
+const uint8_t CTRL_UP_PIN     = 12; // 3 on PCB
+const uint8_t CTRL_DOWN_PIN   = 13; // 4 on PCB
+const uint8_t DHT22_PIN       = 14; // 5 on PCB 
 
 // Constants
 const char* SSID              = "WIF_SSID";
@@ -23,28 +24,35 @@ const char* CLIENT_ID         = "Linak1";
 const char* TOPIC_TEMPERATURE = "Linak1/Temperature";
 const char* TOPIC_HUMIDITY    = "Linak1/Humidity";
 const char* TOPIC_POSITION    = "Linak1/Position";
-const char* TOPIC_BTN_UP      = "Linak1/Up";
-const char* TOPIC_BTN_DOWN    = "Linak1/Down";
+const char* TOPIC_BUTTON      = "Linak1/Button";
+
 // Distance 0 to 500mm
 // Board 1
-// R2 = 0.996k, R1 = 9.99k, @10V the output is 898mV or 3378 ADC
+// R2 = 0.996k, R1 = 9.99k, @10V the output is 907mV or 3378 ADC
 // @ 500mm we have 2880ADC, so the distance d = 0.1736*ADC units
-const float  POSITION_COEFF   = 0.1736;
+const float  POSITION_COEFF     = 0.1736;
 const float  POSITION_TOLERANCE = 0.5; // in mm
-const uint16_t UART_SPEED     = 9600;
-const uint16_t WIFI_PERIOD    = 1000;
-const uint16_t WIFI_BREAK     = 2000;
-const uint16_t MQTT_PERIOD    = 30; // Seconds
-const uint8_t  DEBOUNCE_DELAY = 50;
-const uint8_t  DELAY_MQTT     = 50;
-const uint8_t NO_OF_READINGS  = 10;
+const float  POSITION_MAX       = 499.5; // in mm
+
+const uint16_t WIFI_PERIOD      = 1000;
+const uint16_t WIFI_BREAK       = 2000;
+const uint16_t MQTT_PERIOD      = 30; // Seconds
+const uint8_t  DEBOUNCE_DELAY   = 50;
+const uint8_t  DELAY_MQTT       = 50;
+const uint8_t NO_OF_READINGS    = 10;
+
+const uint8_t BUTTON_NONE       = 0;
+const uint8_t BUTTON_DOWN       = 1;
+const uint8_t BUTTON_UP         = 2;
+const uint8_t BUTTON_STOP       = 3;
+
 // Global variables
 AM2302::AM2302_Sensor am2302(DHT22_PIN);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 volatile uint16_t mqttTime = 0;
 float crtPosition = 0.0, prevPosition = 0.0;
-
+uint8_t crtButton = BUTTON_NONE;
 // Timer
 hw_timer_t * timer = NULL;
 
@@ -54,9 +62,13 @@ void setupWiFi();
 void reconnectMQTT();
 void publishToMQTT(const char* topic, const String& payload);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
+void moveUp();
+void moveDown();
+void moveStop();
+void moveMotor();
 float getPosition();
 void getButtons();
-void getSensors();
+void publishSensors();
 void wifiErrorHandler();
 void mqttErrorHandler();
 
@@ -90,9 +102,11 @@ void setup() {
 }
 
 void loop() {
+  yield();
   mqttClient.loop();
-  getButtons();
-  // Check if position changed, new value form MQTT
+  // Check button press and set control pins
+  moveMotor();
+  // MQTT Check if position changed, new value form MQTT
   if (crtPosition != prevPosition) {
     prevPosition = crtPosition;
     crtPosition = getPosition();
@@ -101,27 +115,32 @@ void loop() {
     // Move motor based on position change
     if (crtPosition < prevPosition) {
       // Pull motor rod
-      digitalWrite(CTRL_DOWN_PIN, LOW);
+      moveDown();
     } else if (crtPosition > prevPosition) {
       // Push motor rod
-      digitalWrite(CTRL_UP_PIN, LOW);
+      moveUp();
     }
+    publishToMQTT(TOPIC_BUTTON, String(crtButton));
     // Wait until position gets in tolerance, target +/- 0.5mm
     while (1) {
       crtPosition = getPosition();
-      if(minPosition < crtPosition) && (crtPosition < maxPosition)) {
+      // If we are in tolerance
+      if((minPosition < crtPosition) && (crtPosition < maxPosition)) {
+        // Set previous position
         prevPosition = crtPosition;
-        break; // Exit loop
+        // Exit loop
+        break; 
       }
     }
     // Stop motor movement
-    digitalWrite(CTRL_UP_PIN, HIGH);
-    digitalWrite(CTRL_DOWN_PIN, HIGH);
+    moveStop();
+    // Publish all topics
+    publishSensors();
   }
 
   // Publish sensor data to MQTT server
   if (mqttTime >= MQTT_PERIOD) {
-    getSensors();
+    publishSensors();
     mqttTime = 0;
   }
 
@@ -185,32 +204,65 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
+void moveUp() {
+  digitalWrite(CTRL_UP_PIN, LOW);
+  digitalWrite(CTRL_DOWN_PIN, HIGH);
+}
+
+void moveDown() {
+  digitalWrite(CTRL_UP_PIN, HIGH);
+  digitalWrite(CTRL_DOWN_PIN, LOW);
+}
+
+void moveStop() {
+  digitalWrite(CTRL_UP_PIN, HIGH);
+  digitalWrite(CTRL_DOWN_PIN, HIGH);
+  crtButton = BUTTON_NONE;
+}
+
+void moveMotor() {
+  // Check to see if we have a button pressed
+  getButtons();
+  // If a button is pressed
+  if(crtButton) {
+    float motorPos = getPosition();
+    switch(crtButton){
+      case BUTTON_DOWN: // 1
+        if(motorPos > POSITION_TOLERANCE) moveDown();
+      break;
+      case BUTTON_UP: // 2
+        if(motorPos < POSITION_MAX) moveUp();
+      break;
+      case BUTTON_STOP: // 3
+        moveStop();
+      break;
+    }
+  }
+}
+
 // Read current position from analog pin
 float getPosition() {
-  uint16_t sum = 0;
+  float sum = 0.0;
   for(uint8_t i = 0; i < NO_OF_READINGS; i++){
-    sum += analogRead(POSITION_PIN);
+    sum += (float)analogRead(POSITION_PIN);
     delay(1);
   }
-  sum /= NO_OF_READINGS;
-  return (float)sum * POSITION_COEFF;
+  sum /= (float)NO_OF_READINGS;
+  return sum * POSITION_COEFF;
 }
 
 // Read button states
 void getButtons() {
-  if (digitalRead(BTN_UP_PIN)) {
-    publishToMQTT(TOPIC_BTN_UP, "1");
-  } else if (digitalRead(BTN_DOWN_PIN)) {
-    publishToMQTT(TOPIC_BTN_DOWN, "1");
-  }
+  crtButton = (!digitalRead(BTN_UP_PIN) << 1) | !digitalRead(BTN_DOWN_PIN);
   delay(DEBOUNCE_DELAY);
 }
 
 // Read sensor data and publish to MQTT
-void getSensors() {
+void publishSensors() {
   publishToMQTT(TOPIC_TEMPERATURE, String(am2302.get_Temperature()));
   publishToMQTT(TOPIC_HUMIDITY, String(am2302.get_Humidity()));
   publishToMQTT(TOPIC_POSITION, String(crtPosition));
+  publishToMQTT(TOPIC_BUTTON, String(crtButton));
 }
 
 // Handle WiFi error
