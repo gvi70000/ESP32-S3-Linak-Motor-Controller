@@ -1,0 +1,243 @@
+uid: Linak
+tags: []
+props:
+  parameters:
+    - description: Widget Name
+      label: Heater Text
+      name: headerVal
+      required: false
+      type: TEXT
+    - context: item
+      description: Temperatura
+      label: Temperatura
+      name: temperatura
+      required: false
+      type: TEXT
+    - context: item
+      description: Umiditate
+      label: Umiditate
+      name: umiditate
+      required: false
+      type: TEXT
+    - context: item
+      description: Pozitie Capac
+      label: Pozitie Capac
+      name: pozitieCapac
+      required: false
+      type: TEXT
+    - context: item
+      description: Buton
+      label: Buton
+      name: buton
+      required: false
+      type: TEXT
+    - default: Inchide,Dechide,Opreste
+      description: Comma-separated List of options.
+      label: Light effects options
+      name: stareCapac
+      required: true
+      type: TEXT
+  parameterGroups: []
+timestamp: Mar 12, 2024, 6:52:21 PM
+component: f7-card
+config: {}
+slots:
+  default:
+    - component: f7-card-content
+      config:
+        class:
+          - display-flex
+          - flex-direction-column
+          - justify-content-flex-start
+          - align-items-center
+        style:
+          --f7-card-margin-horizontal: 5px
+          --f7-card-margin-vertical: 10px
+          height: auto
+      slots:
+        default:
+          - component: f7-block
+            config:
+              style:
+                margin: 5px
+            slots:
+              default:
+                - component: f7-row
+                  config:
+                    class:
+                      - align-items-center
+                  slots:
+                    default:
+                      - component: oh-icon
+                        config:
+                          height: 32px
+                          icon: iconify:mdi:piston
+                          inline: true
+                          style:
+                            color: white
+                            margin: 15px 0px 15px 15px
+                      - component: Label
+                        config:
+                          style:
+                            color: white
+                            margin-left: 10px
+                            font-size: 24px
+                            line-height: var(--f7-navbar-link-line-height,var(--f7-navbar-height))
+                          text: =props.headerVal
+          - component: f7-row
+            config:
+              style:
+                height: auto
+                margin: 10px
+                width: 100%
+            slots:
+              default:
+                - component: f7-icon
+                  config:
+                    f7: thermometer
+                    size: 24
+                    style:
+                      color: var(--f7-block-header-text-color)
+                - component: Label
+                  config:
+                    style:
+                      color: var(--f7-block-header-text-color)
+                      font-size: 18px
+                    text: ='Temperatura ' + items[props.temperatura].state + '°'
+                - component: oh-trend
+                  config:
+                    style:
+                      height: 100%
+                      max-width: 33%
+                    trendGradient:
+                      - red
+                      - yellow
+                      - green
+                      - yellow
+                      - red
+                    trendItem: =props.temperatura
+          - component: f7-row
+            config:
+              style:
+                height: auto
+                margin: 10px
+                width: 100%
+            slots:
+              default:
+                - component: f7-icon
+                  config:
+                    f7: text_justify
+                    size: 24
+                    style:
+                      color: var(--f7-block-header-text-color)
+                - component: Label
+                  config:
+                    style:
+                      color: var(--f7-block-header-text-color)
+                      font-size: 18px
+                    text: ='Umiditate ' + items[props.umiditate].state + ' %'
+                - component: oh-trend
+                  config:
+                    style:
+                      height: 100%
+                      max-width: 33%
+                    trendGradient:
+                      - red
+                      - yellow
+                      - green
+                      - yellow
+                      - red
+                    trendItem: =props.umiditate
+          - component: f7-row
+            config:
+              class:
+                - display-flex
+                - justify-content-space-between
+                - align-items-center
+              style:
+                height: auto
+                margin: 10px
+                width: 100%
+            slots:
+              default:
+                - component: oh-icon
+                  config:
+                    height: 32px
+                    icon: material:door_sliding
+                    inline: true
+                    color: white
+                    margin: 15px 0px 15px 15px
+                - component: Label
+                  config:
+                    style:
+                      color: var(--f7-block-header-text-color)
+                    text: =items[props.pozitieCapac].state
+                - component: oh-slider
+                  config:
+                    color: white
+                    item: =props.pozitieCapac
+                    label: true
+                    max: =100
+                    min: =0
+                    style:
+                      --f7-range-bar-active-bg-color: rgba(246,246,0,0.5)
+                      --f7-range-bar-bg-color: linear-gradient(to right, rgba(255,0,0,0.8), rgba(0,255,0,0.8))
+                      --f7-range-bar-border-radius: 12px
+                      --f7-range-bar-size: 24px
+                      --f7-range-knob-box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3)
+                      --f7-range-knob-size: 28px
+                      --f7-range-label-text-color: black
+                      width: 80%
+                      margin: 10px
+                      z-index: 99 !important
+          - component: f7-segmented
+            config:
+              class:
+                - padding-bottom-half
+              outline: false
+              round: false
+              style:
+                --f7-button-border-radius: 4px
+                --f7-button-font-size: 14px
+                --f7-button-font-weight: 300
+                --f7-button-outline-border-width: 1px
+                --f7-button-padding-horizontal: 0px
+                --f7-button-padding-vertical: 0px
+                --f7-button-text-color: "=themeOptions.dark === 'light' ? 'black' : 'white'"
+                --f7-button-text-transform: none
+                margin-left: 10px
+                margin-right: 10px
+                width: 100%
+            slots:
+              default:
+                - component: oh-repeater
+                  config:
+                    for: size
+                    fragment: true
+                    sourceType: range
+                  slots:
+                    default:
+                      - component: oh-repeater
+                        config:
+                          for: size
+                          fragment: true
+                          sourceType: range
+                        slots: {}
+                      - component: oh-repeater
+                        config:
+                          for: mode
+                          fragment: true
+                          in: =[props.stareCapac.split(",")[loop.size].split(",")[0]]
+                        slots:
+                          default:
+                            - component: oh-button
+                              config:
+                                action: command
+                                actionCommand: =((loop.size + 1) || "1")
+                                actionItem: =props.buton
+                                fill: "=((loop.size + 1) == items[props.buton].state) ? true : false"
+                                outline: true
+                                round: true
+                                style:
+                                  --f7-button-border-color: var(--f7-card-outline-border-color)
+                                text: =loop.mode
