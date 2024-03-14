@@ -39,7 +39,7 @@ const char* TOPIC_S_BUTTON    = "wifi/Linak1/setButton"; //Set Button
 // R2 = 0.996k, R1 = 9.99k, @10V the output is 907mV or 3378 ADC
 // @ 500mm we have 2880ADC, so the distance d = 0.1736*ADC units
 const float  POSITION_COEFF     = 0.1736;
-const float  POSITION_TOLERANCE = 0.5; // in mm
+const float  POSITION_TOLERANCE = 0.2; // in mm
 const float  POSITION_MAX       = 500.0; // in mm
 // Handle in OpenHAB
 
@@ -63,11 +63,10 @@ PubSubClient mqttClient(wifiClient);
 volatile uint16_t mqttTime = 0;
 // Used to know the position to get to and current position
 float targetPosition = 0.0;
+float prevTargetPosition = 0.0;
 // Current button
 uint8_t crtMqttButton = BUTTON_NONE;
 uint8_t crtHwButton = BUTTON_NONE;
-// Used to get new position from MQTT server
-uint8_t mqttPositionChanged = 0;
 // Motor position 
 float crtPosition = 0.0;
 // Timer
@@ -82,7 +81,7 @@ uint8_t isInTolerace();
 void processPosition() ;
 void moveMotor();
 void moveStop();
-void buttonMoveMotor();
+void checkButtons();
 float getPosition();
 void getButtons();
 void publishSensors();
@@ -138,13 +137,11 @@ void loop() {
   yield();
   mqttClient.loop();
   // Check if a button is pressed and move the motor
-  buttonMoveMotor();
-  // If we get ne position value from MQTT
-  if (mqttPositionChanged) {
-    mqttPositionChanged = 0;
+  checkButtons();
+  // If we get ane new position from MQTT
+  if(prevTargetPosition != targetPosition){
     moveMotor();
   }
-
   // Publish sensor data to MQTT server
   if (mqttTime >= MQTT_PERIOD) {
     publishSensors();
@@ -205,7 +202,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   if (strcmp(topic, TOPIC_S_POSITION) == 0) {
     // If the motor is not moving accept new position
     targetPosition = messageTemp.toFloat();
-    mqttPositionChanged = 1;
   }
   if (strcmp(topic, TOPIC_S_BUTTON) == 0) {
     crtMqttButton = messageTemp.toInt();
@@ -241,28 +237,25 @@ void moveMotor() {
   // Get current position
   crtPosition = getPosition();
   // Do I need to move?
-  if(isInTolerace()) {
-    crtMqttButton = BUTTON_STOP;
-    publishToMQTT(TOPIC_BUTTON, String(crtMqttButton));
-    return;
-  }
-  processPosition();
-  uint16_t prevMqttTime = mqttTime;
-  while(!isInTolerace()) {
-    // Get current position
-    crtPosition = getPosition();
-    // Check if stop button is pressed/ check MQTT
-    getButtons();
+  if(!isInTolerace()) { 
     processPosition();
-    yield();
-    mqttClient.loop();
-    // Exit if we detect stop
-    if ((crtHwButton == BUTTON_STOP) || (crtMqttButton == BUTTON_STOP)) break;
-    // Send position to MQTT every second
-    if(prevMqttTime != mqttTime) {
-      prevMqttTime = mqttTime;
-      publishToMQTT(TOPIC_BUTTON, String(crtMqttButton));
-      publishToMQTT(TOPIC_POSITION, String(crtPosition));
+    uint16_t prevMqttTime = mqttTime;
+    while(!isInTolerace()) {
+      // Get current position
+      crtPosition = getPosition();
+      // Check if stop button is pressed/ check MQTT
+      getButtons();
+      processPosition();
+      yield();
+      mqttClient.loop();
+      // Exit if we detect stop
+      if ((crtHwButton == BUTTON_STOP) || (crtMqttButton == BUTTON_STOP)) break;
+      // Send position to MQTT every second
+      if(prevMqttTime != mqttTime) {
+        prevMqttTime = mqttTime;
+        publishToMQTT(TOPIC_BUTTON, String(crtMqttButton));
+        publishToMQTT(TOPIC_POSITION, String(crtPosition));
+      }
     }
   }
   moveStop();
@@ -274,12 +267,13 @@ void moveStop() {
   digitalWrite(CTRL_DOWN_PIN, HIGH);
   crtMqttButton = BUTTON_STOP;
   targetPosition = getPosition();
+  prevTargetPosition = targetPosition;
   publishToMQTT(TOPIC_POSITION, String(getPosition()));
   publishToMQTT(TOPIC_BUTTON, String(crtMqttButton));
 }
 
 // Moves the motor when a button is pressed
-void buttonMoveMotor() {
+void checkButtons() {
   // Check if stop button is pressed
   getButtons();
   if ((crtHwButton == BUTTON_DOWN) || (crtMqttButton == BUTTON_DOWN)) {
@@ -287,8 +281,6 @@ void buttonMoveMotor() {
   } else if ((crtHwButton == BUTTON_UP) || (crtMqttButton == BUTTON_UP)) {
     targetPosition = POSITION_MAX;
   }
-  moveMotor();
-  // The stop button is handled in moveMotor()
 }
 
 // Read current position from analog pin
